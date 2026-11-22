@@ -1,27 +1,43 @@
-// ИИ (Claude API) — запросы идут прямо с телефона, ключ хранится только на телефоне
+// ИИ: бесплатный Google Gemini (по умолчанию) или Claude (если ключ sk-ant-…).
+// Запросы идут прямо с телефона, ключ хранится только на телефоне.
 import * as U from './util.js';
 import * as F from './finance.js';
 
-const API = 'https://api.anthropic.com/v1/messages';
 export const MODELS = [
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5 — баланс цены и качества' },
-  { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5 — дешевле и быстрее' },
-  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5 — самый умный, дороже' },
+  { id: 'gemini-3.8-flash', provider: 'gemini', name: 'Gemini 3.8 Flash — самая умная из бесплатных (рекомендую)' },
+  { id: 'gemini-3.6-flash', provider: 'gemini', name: 'Gemini 3.6 Flash — бесплатная, запасная' },
+  { id: 'gemini-3.5-flash-lite', provider: 'gemini', name: 'Gemini 3.5 Flash-Lite — бесплатная, самая быстрая' },
+  { id: 'claude-sonnet-5-5', provider: 'claude', name: 'Claude Sonnet 5.5 — платно, нужен ключ sk-ant-…' },
+  { id: 'claude-opus-5-5', provider: 'claude', name: 'Claude Opus 5.5 — платно, самый умный' },
 ];
 
-export async function call(S, body) {
-  if (!S.settings.apiKey) throw new Error('NO_KEY');
+export const apiKey = S => String(S.settings.apiKey || self.APP_AI_KEY || '').trim();
+export const hasKey = S => !!apiKey(S);
+export const hasBuiltInKey = () => !!String(self.APP_AI_KEY || '').trim();
+export const provider = S => apiKey(S).startsWith('sk-ant-') ? 'claude' : 'gemini';
+
+// Выбранная модель + запасные того же провайдера (если лимит исчерпан или модель недоступна)
+function modelChain(S) {
+  const list = MODELS.filter(m => m.provider === provider(S)).map(m => m.id);
+  const chosen = list.includes(S.settings.model) ? S.settings.model : list[0];
+  return [...new Set([chosen, ...list])];
+}
+
+// ---------- Claude ----------
+async function claudeCall(S, body) {
+  const key = apiKey(S);
+  if (!key) throw new Error('NO_KEY');
   let res;
   try {
-    res = await fetch(API, {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': S.settings.apiKey.trim(),
+        'x-api-key': key,
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify({ model: S.settings.model || MODELS[0].id, max_tokens: 2048, ...body }),
+      body: JSON.stringify({ model: modelChain(S)[0], max_tokens: 2048, ...body }),
     });
   } catch {
     throw new Error('Нет связи с ИИ. Проверь интернет.');
@@ -29,14 +45,106 @@ export async function call(S, body) {
   if (!res.ok) {
     let msg = '';
     try { msg = (await res.json()).error?.message || ''; } catch { /* */ }
-    if (res.status === 401) throw new Error('Неверный API-ключ. Проверь его в настройках.');
+    if (res.status === 401) throw new Error('Неверный ключ ИИ. Проверь его в настройках.');
     if (res.status === 429) throw new Error('Слишком много запросов или превышен лимит. Подожди минуту.');
-    if (res.status === 400 && /credit|balance|billing/i.test(msg)) throw new Error('На балансе API закончились деньги — пополни его в консоли Anthropic.');
+    if (res.status === 400 && /credit|balance|billing/i.test(msg)) throw new Error('На балансе Claude API закончились деньги.');
     if (res.status === 404) throw new Error('Модель не найдена — выбери другую модель в настройках.');
     if (res.status === 529 || res.status >= 500) throw new Error('Сервер ИИ перегружен, попробуй чуть позже.');
     throw new Error(`Ошибка ИИ (${res.status}). ${msg}`);
   }
   return res.json();
+}
+
+// ---------- Gemini ----------
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models/';
+
+function geminiError(code, status, msg) {
+  const all = `${status} ${msg}`;
+  if (/location|region|country/i.test(msg)) return new Error('Gemini API недоступен в этом регионе.');
+  if (code === 400 && /API.?key|API_KEY/i.test(all)) return new Error('Неверный ключ ИИ. Проверь его в настройках.');
+  if (code === 401 || code === 403) return new Error('Ключ не подошёл к Gemini API.' + (msg ? ' ' + msg : ''));
+  if (code === 429) return new Error('Бесплатный лимит запросов исчерпан. Подожди минуту; дневной лимит обновляется ночью.');
+  if (code === 404) return new Error('Модель недоступна — выбери другую в настройках.');
+  if (code >= 500) return new Error('Сервер ИИ перегружен, попробуй чуть позже.');
+  return new Error(`Ошибка ИИ (${code}). ${msg}`);
+}
+
+const cooldown = {};
+async function geminiCall(S, body) {
+  const key = apiKey(S);
+  if (!key) throw new Error('NO_KEY');
+  let lastErr = null;
+  const chain = modelChain(S);
+  const ready = chain.filter(m => !(cooldown[m] > Date.now()));
+  for (const model of ready.length ? ready : chain) {
+    let res;
+    try {
+      res = await fetch(GEMINI + model + ':generateContent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw new Error('Нет связи с ИИ. Проверь интернет.');
+    }
+    if (res.ok) { const j = await res.json(); j._model = model; return j; }
+    let msg = '', status = '';
+    try { const e = (await res.json()).error || {}; msg = e.message || ''; status = e.status || ''; } catch { /* */ }
+    const err = geminiError(res.status, status, msg);
+    if ([404, 429, 500, 503].includes(res.status)) { // пробуем запасную модель, эту на время пропускаем
+      cooldown[model] = Date.now() + (res.status === 404 ? 6 * 3600e3 : 60e3);
+      lastErr = err; continue;
+    }
+    throw err;
+  }
+  throw lastErr || new Error('ИИ не ответил.');
+}
+
+function gCandidate(r) {
+  const c = r.candidates?.[0];
+  if (!c) throw new Error(r.promptFeedback?.blockReason ? 'ИИ отказался отвечать на этот запрос.' : 'ИИ не ответил.');
+  return c;
+}
+const gParts = r => r.candidates?.[0]?.content?.parts || [];
+const gText = parts => parts.filter(p => p.text && !p.thought).map(p => p.text).join('\n').trim();
+
+// Нейтральный формат вложений: {text} | {image:{mime,data}} | {pdf:data}
+const toClaude = parts => parts.map(p => p.text != null ? { type: 'text', text: p.text }
+  : p.image ? { type: 'image', source: { type: 'base64', media_type: p.image.mime, data: p.image.data } }
+  : { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.pdf } });
+const toGemini = parts => parts.map(p => p.text != null ? { text: p.text }
+  : p.image ? { inlineData: { mimeType: p.image.mime, data: p.image.data } }
+  : { inlineData: { mimeType: 'application/pdf', data: p.pdf } });
+
+// Ответ строго по схеме — через принудительный вызов функции
+async function structured(S, tool, parts, maxTokens) {
+  if (provider(S) === 'claude') {
+    const r = await claudeCall(S, { max_tokens: Math.min(maxTokens, 16000), tools: [tool], tool_choice: { type: 'tool', name: tool.name }, messages: [{ role: 'user', content: toClaude(parts) }] });
+    const tu = r.content?.find(c => c.type === 'tool_use');
+    if (!tu) throw new Error('ИИ не смог разобрать данные.');
+    return tu.input;
+  }
+  const r = await geminiCall(S, {
+    contents: [{ role: 'user', parts: toGemini(parts) }],
+    tools: [{ functionDeclarations: [{ name: tool.name, description: tool.description, parameters: tool.input_schema }] }],
+    toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [tool.name] } },
+    generationConfig: { maxOutputTokens: maxTokens },
+  });
+  gCandidate(r);
+  const fc = gParts(r).find(p => p.functionCall)?.functionCall;
+  if (!fc) throw new Error('ИИ не смог разобрать данные.');
+  return fc.args || {};
+}
+
+// Проверка ключа: возвращает название модели, которая ответила
+export async function ping(S) {
+  if (provider(S) === 'claude') {
+    await claudeCall(S, { max_tokens: 10, messages: [{ role: 'user', content: 'Ответь одним словом: работает' }] });
+    return modelChain(S)[0];
+  }
+  const r = await geminiCall(S, { contents: [{ role: 'user', parts: [{ text: 'Ответь одним словом: работает' }] }], generationConfig: { maxOutputTokens: 1024 } });
+  gCandidate(r);
+  return r._model;
 }
 
 // Сжимаем фото, чтобы запрос был быстрым и дешёвым
@@ -50,12 +158,6 @@ export async function resizeImage(file, max = 1600) {
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
   return { data: c.toDataURL('image/jpeg', 0.85).split(',')[1], media_type: 'image/jpeg' };
 }
-
-const toolInput = r => {
-  const tu = r.content?.find(c => c.type === 'tool_use');
-  if (!tu) throw new Error('ИИ не смог разобрать данные.');
-  return tu.input;
-};
 
 export async function readReceipt(S, file) {
   const img = await resizeImage(file);
@@ -90,18 +192,10 @@ export async function readReceipt(S, file) {
       required: ['readable', 'total', 'items'],
     },
   };
-  const r = await call(S, {
-    max_tokens: 4096,
-    tools: [tool],
-    tool_choice: { type: 'tool', name: 'save_receipt' },
-    messages: [{
-      role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } },
-        { type: 'text', text: `Это фото кассового чека (Казахстан, тенге). Сегодня ${U.today()}. Распознай магазин, дату, итог, способ оплаты и все позиции. Если год написан двумя цифрами — это 20XX. Скидки вычти из суммы позиции. Сокращённые названия расшифруй, если уверен. Каждой позиции подбери категорию из списка.` },
-      ],
-    }],
-  });
-  const res = toolInput(r);
+  const res = await structured(S, tool, [
+    { image: { mime: img.media_type, data: img.data } },
+    { text: `Это фото кассового чека (Казахстан, тенге). Сегодня ${U.today()}. Распознай магазин, дату, итог, способ оплаты и все позиции. Если год написан двумя цифрами — это 20XX. Скидки вычти из суммы позиции. Сокращённые названия расшифруй, если уверен. Каждой позиции подбери категорию из списка.` },
+  ], 8192);
   if (res.readable === false) throw new Error('Не получилось прочитать чек. Сфотографируй ровнее и при хорошем свете.');
   return res;
 }
@@ -134,18 +228,10 @@ export async function readStatementPdf(S, file) {
       required: ['rows'],
     },
   };
-  const r = await call(S, {
-    max_tokens: 16000,
-    tools: [tool],
-    tool_choice: { type: 'tool', name: 'save_statement' },
-    messages: [{
-      role: 'user', content: [
-        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } },
-        { type: 'text', text: 'Это выписка из банка Kaspi. Извлеки ВСЕ операции из таблицы без пропусков. Год из двух цифр — это 20XX.' },
-      ],
-    }],
-  });
-  const res = toolInput(r);
+  const res = await structured(S, tool, [
+    { pdf: data },
+    { text: 'Это выписка из банка Kaspi. Извлеки ВСЕ операции из таблицы без пропусков. Год из двух цифр — это 20XX.' },
+  ], 32000);
   return {
     rows: (res.rows || []).map(x => ({ date: x.date, sign: x.sign === '+' ? 1 : -1, amount: Math.abs(+x.amount || 0), op: x.operation || '', details: x.details || '' })),
     balance: res.balance_end != null && res.balance_date ? { date: res.balance_date, amount: res.balance_end } : null,
@@ -327,23 +413,53 @@ export async function chat(S, userText, history) {
   while (msgs.length && msgs[0].role !== 'user') msgs.shift();
   if (msgs.length && msgs[msgs.length - 1].role === 'user') msgs[msgs.length - 1].content += '\n\n' + userText;
   else msgs.push({ role: 'user', content: userText });
+  return provider(S) === 'claude' ? chatClaude(S, system, msgs) : chatGemini(S, system, msgs);
+}
 
+function runTool(S, name, input, actions) {
+  let out;
+  try { out = execTool(S, name, input || {}); } catch (e) { out = { result: 'Ошибка: ' + e.message }; }
+  if (out.action) actions.push(out.action);
+  return out.result;
+}
+
+async function chatClaude(S, system, msgs) {
   const actions = [];
   let text = '';
   for (let i = 0; i < 6; i++) {
-    const r = await call(S, { system, messages: msgs, tools: tools(S), max_tokens: 2048 });
+    const r = await claudeCall(S, { system, messages: msgs, tools: tools(S), max_tokens: 2048 });
     const part = (r.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
     if (part) text += (text ? '\n\n' : '') + part;
     if (r.stop_reason !== 'tool_use') break;
     msgs.push({ role: 'assistant', content: r.content });
-    const results = [];
-    for (const tu of r.content.filter(c => c.type === 'tool_use')) {
-      let out;
-      try { out = execTool(S, tu.name, tu.input || {}); } catch (e) { out = { result: 'Ошибка: ' + e.message }; }
-      if (out.action) actions.push(out.action);
-      results.push({ type: 'tool_result', tool_use_id: tu.id, content: out.result });
-    }
-    msgs.push({ role: 'user', content: results });
+    msgs.push({ role: 'user', content: r.content.filter(c => c.type === 'tool_use').map(tu => ({ type: 'tool_result', tool_use_id: tu.id, content: runTool(S, tu.name, tu.input, actions) })) });
+  }
+  return { text: text || (actions.length ? 'Готово.' : '…'), actions };
+}
+
+async function chatGemini(S, system, msgs) {
+  const contents = msgs.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const decl = tools(S).map(t => ({ name: t.name, description: t.description, parameters: t.input_schema }));
+  const actions = [];
+  let text = '';
+  for (let i = 0; i < 6; i++) {
+    const r = await geminiCall(S, {
+      systemInstruction: { parts: [{ text: system }] },
+      contents,
+      tools: [{ functionDeclarations: decl }],
+      generationConfig: { maxOutputTokens: 8192 },
+    });
+    const cand = gCandidate(r);
+    const parts = cand.content?.parts || [];
+    const part = gText(parts);
+    if (part) text += (text ? '\n\n' : '') + part;
+    const calls = parts.filter(p => p.functionCall);
+    if (!calls.length) break;
+    contents.push(cand.content); // как есть — с подписями размышлений Gemini 3
+    contents.push({
+      role: 'user',
+      parts: calls.map(c => ({ functionResponse: { name: c.functionCall.name, ...(c.functionCall.id ? { id: c.functionCall.id } : {}), response: { result: runTool(S, c.functionCall.name, c.functionCall.args, actions) } } })),
+    });
   }
   return { text: text || (actions.length ? 'Готово.' : '…'), actions };
 }

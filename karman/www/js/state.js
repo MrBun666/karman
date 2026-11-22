@@ -49,7 +49,7 @@ export function defaultState() {
     chat: [],
     dismissed: {},    // скрытые подсказки
     settings: {
-      name: '', apiKey: '', model: 'claude-sonnet-5-5', payday: null, pinHash: null,
+      name: '', apiKey: '', model: 'gemini-3.8-flash', payday: null, pinHash: null,
       lastBackup: null, theme: 'auto', defaultAccount: 'cash', onboarded: false, monthlyIncome: null,
       confirmPush: true, remindPayments: true, eveningReminder: true, eveningTime: '21:00', weeklySummary: true, autoAsked: false,
     },
@@ -65,6 +65,8 @@ function migrate(s) {
   // новые категории из обновлений добавляются, пользовательские не трогаем
   for (const c of d.categories) if (!s.categories.find(x => x.id === c.id)) s.categories.push(c);
   for (const a of s.accounts) if (!a.anchor) a.anchor = anchor0();
+  // переход на бесплатный Gemini: старый выбор Claude без ключа Claude сбрасываем
+  if (/^claude/.test(s.settings.model || '') && !String(s.settings.apiKey || '').startsWith('sk-ant-')) s.settings.model = 'gemini-3.8-flash';
   return s;
 }
 

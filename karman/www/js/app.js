@@ -356,10 +356,10 @@ function msgHtml(m, i) {
   return `<div class="msg ai ${m.error ? 'err' : ''}"><div class="bubble">${md(m.content)}${(m.actions || []).map((a, j) => `<div class="action ${a.undone ? 'undone' : ''}"><span>${a.undone ? '↩️ Отменено: ' : '✅ '}${esc(a.label)}</span>${a.undone ? '' : `<button data-a="chat-undo" data-i="${i}" data-j="${j}">Отменить</button>`}</div>`).join('')}</div></div>`;
 }
 function vChat() {
-  const noKey = !S.settings.apiKey;
+  const noKey = !AI.hasKey(S);
   const html = `
     <div class="chat" id="chat">
-      ${noKey ? `<div class="card warnbox"><b>Нужен ключ ИИ</b><p class="small">ИИ-помощник работает через Claude API. Получи ключ на console.anthropic.com → API Keys, пополни баланс на несколько долларов и вставь ключ в настройках. Ключ хранится только на этом телефоне.</p><button class="btn primary small" data-a="go" data-to="settings">Открыть настройки</button></div>` : ''}
+      ${noKey ? `<div class="card warnbox"><b>Нужен ключ ИИ</b><p class="small">ИИ-помощник работает через бесплатный Google Gemini. Получи ключ на aistudio.google.com → Get API key и вставь его в настройках. Ключ хранится только на этом телефоне.</p><button class="btn primary small" data-a="go" data-to="settings">Открыть настройки</button></div>` : ''}
       ${!S.chat.length ? `<div class="msg ai"><div class="bubble"><p>Привет! Я вижу твои операции, календарь, цели и кредиты. Могу:</p><ul><li>разобрать расходы и подсказать, где сэкономить;</li><li>составить план погашения кредита или накопления;</li><li>сам поставить платежи в календарь — разовые или «на постоянку».</li></ul></div></div>
         <div class="chips wrap">${CHAT_SUGGEST.map(q => `<button class="pill" data-a="chat-ask" data-q="${esc(q)}" data-send="1">${esc(q)}</button>`).join('')}</div>` : ''}
       ${S.chat.map(msgHtml).join('')}
@@ -382,7 +382,7 @@ function vChat() {
 }
 async function sendChat(text) {
   if (ui.chatBusy) return;
-  if (!S.settings.apiKey) { toast('Сначала добавь API-ключ в настройках'); location.hash = '#settings'; return; }
+  if (!AI.hasKey(S)) { toast('Сначала добавь ключ ИИ в настройках'); location.hash = '#settings'; return; }
   const hist = S.chat.filter(m => !m.error);
   S.chat.push({ role: 'user', content: text, ts: Date.now() });
   ui.chatBusy = true; save();
@@ -664,9 +664,10 @@ function vSettings() {
       </div>
       <label class="field"><span class="lbl">Счёт для быстрого ввода</span>${accChips('defaultAccount', st.defaultAccount)}</label>
       <h2 class="mt12">ИИ (Claude)</h2>
-      <label class="field"><span class="lbl">API-ключ</span><input name="apiKey" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="sk-ant-…"></label>
+      <label class="field"><span class="lbl">Ключ ИИ (Gemini или Claude)</span><input name="apiKey" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="${AI.hasBuiltInKey() ? 'встроенный ключ Gemini уже подключён' : 'AQ.… или AIza… (Gemini), sk-ant-… (Claude)'}"></label>
+      ${AI.hasBuiltInKey() ? '<p class="small pos">✓ Встроенный ключ Gemini подключён. Поле можно оставить пустым.</p>' : ''}
       <label class="field"><span class="lbl">Модель</span><select name="model">${AI.MODELS.map(m => `<option value="${m.id}" ${m.id === st.model ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}${!AI.MODELS.some(m => m.id === st.model) ? `<option value="${esc(st.model)}" selected>${esc(st.model)}</option>` : ''}</select></label>
-      <p class="small muted">Ключ: console.anthropic.com → API Keys. Поставь там месячный лимит расходов, чтобы не было сюрпризов. Ключ хранится только на этом телефоне и не попадает в резервную копию.</p>
+      <p class="small muted">Бесплатный ключ Gemini: aistudio.google.com → Get API key. Если лимит выбранной модели закончится, приложение само переключится на запасную. Ключ хранится только на телефоне и не попадает в резервную копию.</p>
       <div class="row gap"><button class="btn primary grow">Сохранить</button><button type="button" class="btn grow" data-a="ai-test">Проверить ИИ</button></div>
     </form>
 
@@ -1171,7 +1172,7 @@ async function importKaspiPdf(file) {
   try { parsed = K.parseKaspiLines(await K.pdfLines(file)); } catch (e) { err = e; console.warn(e); }
   l.close();
   if (!parsed.rows.length) {
-    if (!S.settings.apiKey) { toast(err ? err.message : 'Не удалось найти операции в файле. Добавь ключ ИИ — он распознает любую выписку.'); return; }
+    if (!AI.hasKey(S)) { toast(err ? err.message : 'Не удалось найти операции в файле. Добавь ключ ИИ — он распознает любую выписку.'); return; }
     if (!(await ask('Распознать через ИИ?', 'Автоматически разобрать файл не получилось. ИИ прочитает выписку любого формата (займёт до минуты).', 'Распознать'))) return;
     const l2 = loading('ИИ читает выписку…');
     try { parsed = await AI.readStatementPdf(S, file); } catch (e) { l2.close(); toast(e.message); return; }
@@ -1259,8 +1260,8 @@ async function detectQr(file) {
 async function receiptFlow(file) {
   if (!file) return;
   const qr = await detectQr(file);
-  if (!S.settings.apiKey) {
-    sheet(`<p>Чтобы распознавать чеки по фото, нужен ключ ИИ (Claude API). Это стоит примерно несколько тенге за чек.</p>${qr ? `<p class="small">QR-код чека найден: <a href="${esc(qr)}" target="_blank" rel="noopener">открыть чек в ОФД</a></p>` : ''}<button class="btn primary block" data-a="go" data-to="settings">Добавить ключ</button><button class="btn block mt6" data-a="add" data-type="expense">Ввести вручную</button>`, { title: 'Нужен ключ ИИ' });
+  if (!AI.hasKey(S)) {
+    sheet(`<p>Чтобы распознавать чеки по фото, нужен ключ ИИ. Бесплатный ключ Gemini можно получить на aistudio.google.com.</p>${qr ? `<p class="small">QR-код чека найден: <a href="${esc(qr)}" target="_blank" rel="noopener">открыть чек в ОФД</a></p>` : ''}<button class="btn primary block" data-a="go" data-to="settings">Добавить ключ</button><button class="btn block mt6" data-a="add" data-type="expense">Ввести вручную</button>`, { title: 'Нужен ключ ИИ' });
     return;
   }
   const l = loading('ИИ читает чек…');
@@ -1503,7 +1504,7 @@ const A = {
     const f = $('#setf');
     if (f) { S.settings.apiKey = fv(f, 'apiKey').trim(); S.settings.model = fv(f, 'model'); save(); }
     const l = loading('Проверяю…');
-    try { await AI.call(S, { max_tokens: 10, messages: [{ role: 'user', content: 'Ответь одним словом: работает' }] }); l.close(); toast('✅ ИИ работает'); }
+    try { const m = await AI.ping(S); l.close(); toast(`✅ ИИ работает · ${m}`); }
     catch (e) { l.close(); toast(e.message === 'NO_KEY' ? 'Введи ключ' : e.message); }
   },
   voice: () => startVoice(),
