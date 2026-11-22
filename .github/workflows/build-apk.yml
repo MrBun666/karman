@@ -1,11 +1,8 @@
 name: Сборка APK
 
-# Запускается при каждой загрузке изменений в ветку main (или вручную: Actions → Сборка APK → Run workflow).
-# Результат — релиз на GitHub с файлом .apk; приложение само увидит его и предложит обновиться.
 on:
   push:
     branches: [main]
-    paths: ['www/**', 'android/**', '.github/workflows/**']
   workflow_dispatch:
 
 permissions:
@@ -26,12 +23,31 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Поиск папки приложения
+        run: |
+          F=$(find . -path '*/www/js/version.js' -not -path '*/assets/*' | head -1)
+          if [ -z "$F" ]; then
+            echo "::error::Не найден файл www/js/version.js. Проверь, что папка www загружена в репозиторий целиком."
+            find . -maxdepth 3 -not -path './.git*' | sort
+            exit 1
+          fi
+          APP_DIR="${F%/www/js/version.js}"
+          if [ ! -f "$APP_DIR/android/app/build.gradle" ]; then
+            echo "::error::Рядом с папкой www нет android/app/build.gradle. Папки www и android должны лежать рядом."
+            find . -maxdepth 3 -not -path './.git*' | sort
+            exit 1
+          fi
+          echo "Папка приложения: $APP_DIR"
+          echo "APP_DIR=$GITHUB_WORKSPACE/${APP_DIR#./}" >> "$GITHUB_ENV"
+
       - name: Подготовка (версия, файлы приложения, ключ подписи)
         env:
           KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          VERSION=$(node -e "global.self={};require('./www/js/version.js');console.log(self.APP_VERSION)")
+          cd "$APP_DIR"
+          VERSION=$(node -e "global.self={};require(process.cwd()+'/www/js/version.js');console.log(self.APP_VERSION)")
+          echo "Версия: $VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
 
@@ -48,15 +64,18 @@ jobs:
           fi
 
       - name: Сборка APK
-        run: gradle -p android assembleRelease --no-daemon --stacktrace
+        run: |
+          cd "$APP_DIR"
+          gradle -p android assembleRelease --no-daemon --stacktrace
 
       - name: Публикация релиза
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cd "$APP_DIR"
           APK="karman-$VERSION-build$BUILD_NUMBER.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$APK"
-          node -e "global.self={};require('./www/js/version.js');console.log(self.APP_NOTES.map(n=>'- '+n).join('\n'))" > notes.md
+          node -e "global.self={};require(process.cwd()+'/www/js/version.js');console.log(self.APP_NOTES.map(n=>'- '+n).join('\n'))" > notes.md
           gh release create "build-$BUILD_NUMBER" "$APK" \
             --title "Карман $VERSION (сборка $BUILD_NUMBER)" \
             --notes-file notes.md
