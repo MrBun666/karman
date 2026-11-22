@@ -89,6 +89,12 @@ final class NativeBridge {
     public void startVoice() { a.runOnUiThread(a::startVoice); }
 
     @JavascriptInterface
+    public void scanQr() { a.runOnUiThread(a::scanQr); }
+
+    @JavascriptInterface
+    public void loadPageText(final String url) { a.runOnUiThread(() -> a.loadPageText(url)); }
+
+    @JavascriptInterface
     public void openUrl(String url) {
         if (url != null && (url.startsWith("https://") || url.startsWith("http://"))) a.openExternal(url);
     }

@@ -8,8 +8,11 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.speech.RecognizerIntent;
+import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -21,10 +24,16 @@ import android.webkit.WebViewClient;
 import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
+import com.google.mlkit.vision.barcode.common.Barcode;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.regex.Pattern;
 
 /** Главный экран: веб-интерфейс «Кармана» внутри WebView + мост к Android. */
 public class MainActivity extends Activity {
@@ -189,6 +198,76 @@ public class MainActivity extends Activity {
             fileCallback = null;
             return false;
         }
+    }
+
+    // ---------- QR-код чека ----------
+    /** Сканер Google Play (без разрешения на камеру). Результат уходит в JS: onQr(текст, ошибка). */
+    void scanQr() {
+        try {
+            GmsBarcodeScannerOptions opts = new GmsBarcodeScannerOptions.Builder()
+                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                    .enableAutoZoom()
+                    .build();
+            GmsBarcodeScanning.getClient(this, opts).startScan()
+                    .addOnSuccessListener(b -> js("window.__karmanNative && window.__karmanNative.onQr(" + JSONObject.quote(b.getRawValue() == null ? "" : b.getRawValue()) + ", null)"))
+                    .addOnCanceledListener(() -> js("window.__karmanNative && window.__karmanNative.onQr(null, 'cancel')"))
+                    .addOnFailureListener(e -> js("window.__karmanNative && window.__karmanNative.onQr(null, " + JSONObject.quote(String.valueOf(e.getMessage())) + ")"));
+        } catch (Throwable t) {
+            js("window.__karmanNative && window.__karmanNative.onQr(null, " + JSONObject.quote(t.toString()) + ")");
+        }
+    }
+
+    // ---------- Текст страницы чека с сайта ОФД ----------
+    private static final Pattern RECEIPT_TEXT = Pattern.compile("итог|сумма|₸|тенге|kzt|фискальн", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private WebView pageWeb;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    /** Открывает страницу в невидимом окне, ждёт, пока она дорисуется, и отдаёт её текст в JS: onPageText(текст). */
+    void loadPageText(final String url) {
+        if (url == null || !(url.startsWith("https://") || url.startsWith("http://"))) { deliverPage(null, ""); return; }
+        if (pageWeb != null) deliverPage(pageWeb, "");
+        final WebView w = new WebView(this);
+        pageWeb = w;
+        w.getSettings().setJavaScriptEnabled(true);
+        w.getSettings().setDomStorageEnabled(true);
+        w.setAlpha(0f);
+        w.setFocusable(false);
+        addContentView(w, new ViewGroup.LayoutParams(2, 2));
+        final int[] tries = {0};
+        final Runnable[] poll = new Runnable[1];
+        poll[0] = () -> {
+            if (pageWeb != w) return;
+            w.evaluateJavascript("(function(){return document.body ? document.body.innerText : ''})()", v -> {
+                String text = "";
+                try { if (v != null && !"null".equals(v)) text = new JSONArray("[" + v + "]").getString(0); } catch (Exception ignored) { }
+                boolean ok = text.length() > 120 && RECEIPT_TEXT.matcher(text).find();
+                if (ok || ++tries[0] >= 8) deliverPage(w, text);
+                else handler.postDelayed(poll[0], 1500);
+            });
+        };
+        w.setWebViewClient(new WebViewClient() {
+            boolean started = false;
+            @Override
+            public void onPageFinished(WebView view, String u) {
+                if (started) return;
+                started = true;
+                handler.postDelayed(poll[0], 1500);
+            }
+        });
+        handler.postDelayed(() -> { if (pageWeb == w) deliverPage(w, ""); }, 22000);
+        w.loadUrl(url);
+    }
+
+    private void deliverPage(WebView w, String text) {
+        if (w != null) {
+            if (pageWeb != w) return;
+            pageWeb = null;
+            try {
+                if (w.getParent() instanceof ViewGroup) ((ViewGroup) w.getParent()).removeView(w);
+                w.destroy();
+            } catch (Exception ignored) { }
+        }
+        js("window.__karmanNative && window.__karmanNative.onPageText(" + JSONObject.quote(text == null ? "" : text) + ")");
     }
 
     // ---------- Голосовой ввод ----------
