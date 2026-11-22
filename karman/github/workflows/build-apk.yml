@@ -1,0 +1,64 @@
+name: Сборка APK
+
+# Запускается при каждой загрузке изменений в ветку main (или вручную: Actions → Сборка APK → Run workflow).
+# Результат — релиз на GitHub с файлом .apk; приложение само увидит его и предложит обновиться.
+on:
+  push:
+    branches: [main]
+    paths: ['www/**', 'android/**', '.github/workflows/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Подготовка (версия, файлы приложения, ключ подписи)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          VERSION=$(node -e "global.self={};require('./www/js/version.js');console.log(self.APP_VERSION)")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+          ASSETS=android/app/src/main/assets
+          rm -rf "$ASSETS/www" && mkdir -p "$ASSETS" && cp -r www "$ASSETS/www"
+          printf "self.APP_BUILD = %s;\nself.APP_REPO = '%s';\n" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" > "$ASSETS/www/js/build-info.js"
+
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/karman.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/karman.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Нет секретов KEYSTORE_BASE64 / KEYSTORE_PASSWORD — APK подписан временным ключом, следующие версии не встанут поверх."
+          fi
+
+      - name: Сборка APK
+        run: gradle -p android assembleRelease --no-daemon --stacktrace
+
+      - name: Публикация релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK="karman-$VERSION-build$BUILD_NUMBER.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$APK"
+          node -e "global.self={};require('./www/js/version.js');console.log(self.APP_NOTES.map(n=>'- '+n).join('\n'))" > notes.md
+          gh release create "build-$BUILD_NUMBER" "$APK" \
+            --title "Карман $VERSION (сборка $BUILD_NUMBER)" \
+            --notes-file notes.md
