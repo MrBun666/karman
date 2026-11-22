@@ -489,22 +489,72 @@ export function tips(S) {
   return out.sort((a, b) => order[a.lvl] - order[b.lvl]);
 }
 
-// ---------- Цены из чеков ----------
+// ---------- Чеки и цены ----------
+export const productKey = n => String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'.,;:()*]/g, ' ').replace(/\s+/g, ' ').trim();
+export const storeName = tx => String(tx.receiptStore || tx.merchant || tx.note || 'Без названия').trim();
+export const storeKey = tx => normalizeMerchant(storeName(tx)) || 'без названия';
+export const receipts = S => S.transactions.filter(t => t.items?.length)
+  .sort((a, b) => b.date.localeCompare(a.date) || (b.created || 0) - (a.created || 0));
+const avgOf = a => a.length ? U.sum(a) / a.length : 0;
+
+// По каждому товару: цены по магазинам, где дешевле, сколько переплачено
 export function priceIndex(S) {
   const map = {};
-  for (const tx of S.transactions) {
-    if (!tx.items?.length) continue;
+  for (const tx of receipts(S)) {
     for (const it of tx.items) {
-      const key = String(it.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const key = productKey(it.name);
       if (!key) continue;
-      const unit = it.price || (it.qty ? it.sum / it.qty : it.sum);
-      (map[key] ||= { name: it.name, entries: [] }).entries.push({ date: tx.date, price: unit, store: tx.merchant || tx.note || '', qty: it.qty, sum: it.sum });
+      const qty = +it.qty > 0 ? +it.qty : 1;
+      const unit = +it.price > 0 ? +it.price : (+it.sum || 0) / qty;
+      if (!(unit > 0)) continue;
+      (map[key] ||= { key, name: it.name, entries: [] }).entries.push({
+        date: tx.date, price: unit, qty, sum: +it.sum || unit * qty, store: storeName(tx), storeKey: storeKey(tx), txId: tx.id,
+      });
     }
   }
   return Object.values(map).map(x => {
     x.entries.sort((a, b) => a.date.localeCompare(b.date));
-    const prices = x.entries.map(e => e.price).filter(p => p > 0);
-    const last = x.entries[x.entries.length - 1];
-    return { ...x, count: x.entries.length, last, min: Math.min(...prices), max: Math.max(...prices), avg: U.sum(prices) / (prices.length || 1), first: x.entries[0] };
+    const byStore = {};
+    for (const e of x.entries) {
+      const st = byStore[e.storeKey] ||= { key: e.storeKey, name: e.store, prices: [], qty: 0 };
+      st.prices.push(e.price); st.qty += e.qty; st.name = e.store; st.last = e;
+    }
+    const stores = Object.values(byStore)
+      .map(st => ({ ...st, min: Math.min(...st.prices), avg: avgOf(st.prices), lastPrice: st.last.price, count: st.prices.length }))
+      .sort((a, b) => a.avg - b.avg);
+    const prices = x.entries.map(e => e.price);
+    const first = x.entries[0], last = x.entries[x.entries.length - 1];
+    const cheapest = stores[0];
+    const paid = U.sum(x.entries, e => e.price * e.qty);
+    const atCheapest = U.sum(x.entries, e => e.qty) * cheapest.avg;
+    return {
+      key: x.key, name: last && x.entries.length ? x.name : x.name, entries: x.entries, stores, cheapest,
+      count: x.entries.length, first, last, min: Math.min(...prices), max: Math.max(...prices), avg: avgOf(prices),
+      overpay: stores.length > 1 ? Math.max(0, paid - atCheapest) : 0,
+      change: first.price ? (last.price / first.price - 1) * 100 : 0,
+    };
   }).sort((a, b) => b.count - a.count || b.last.date.localeCompare(a.last.date));
+}
+
+// Рейтинг магазинов: насколько в среднем дороже самого дешёвого (по товарам, купленным в 2+ магазинах)
+export function storeIndex(S, idx = priceIndex(S)) {
+  const st = {};
+  for (const tx of [...receipts(S)].reverse()) {
+    const k = storeKey(tx);
+    const o = st[k] ||= { key: k, name: storeName(tx), visits: 0, spent: 0, ratios: [], cheapest: 0, compared: 0 };
+    o.visits++; o.spent += tx.amount; o.name = storeName(tx); o.lastDate = tx.date;
+  }
+  for (const p of idx) {
+    if (p.stores.length < 2) continue;
+    const best = p.stores[0].avg;
+    p.stores.forEach((s, i) => {
+      const o = st[s.key];
+      if (!o) return;
+      o.ratios.push(s.avg / best); o.compared++;
+      if (i === 0) o.cheapest++;
+    });
+  }
+  return Object.values(st)
+    .map(o => ({ ...o, index: o.ratios.length ? avgOf(o.ratios) : null }))
+    .sort((a, b) => (a.index ?? 99) - (b.index ?? 99) || b.spent - a.spent);
 }
