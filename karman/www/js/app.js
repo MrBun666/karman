@@ -693,7 +693,8 @@ function vSettings() {
 
     <div class="card"><h2>О приложении</h2>
       <div class="row li"><span>Версия</span><b>${esc(self.APP_VERSION)}</b></div>
-      <button class="btn block" data-a="check-update">Проверить обновления</button></div>`;
+      <button class="btn block" data-a="check-update">Проверить обновления</button>
+      ${N.isNative && self.APP_REPO ? `<button class="btn ghost block mt6" data-a="open-releases">Открыть страницу релизов</button><p class="small muted">Сборка ${esc(self.APP_BUILD)} · ${esc(self.APP_REPO)}</p>` : ''}</div>`;
   return {
     html, mount(v) {
       $('#autocard', v)?.addEventListener('change', e => {
@@ -1520,6 +1521,7 @@ const A = {
     catch (e) { l.close(); toast(e.message === 'NO_KEY' ? 'Введи ключ' : e.message); }
   },
   voice: () => startVoice(),
+  'open-releases': () => openReleases(),
   'auto-access': () => N.openAccess(),
   'notif-settings': () => N.openNotifSettings(),
   'check-update': async () => {
@@ -1687,7 +1689,13 @@ async function checkApkUpdate(manual = false) {
   const l = manual ? loading('Проверяю…') : null;
   try {
     const r = await fetch(`https://api.github.com/repos/${self.APP_REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!r.ok) throw new Error(r.status === 404 ? 'релизов пока нет' : 'GitHub ответил ' + r.status);
+    if (r.status === 404) {
+      // приватный репозиторий: GitHub не показывает релизы без входа в аккаунт
+      l?.close();
+      if (manual) toast('GitHub не отдаёт релизы: репозиторий приватный. Открою страницу релизов в браузере.', { label: 'Открыть', fn: openReleases });
+      return;
+    }
+    if (!r.ok) throw new Error('GitHub ответил ' + r.status);
     const j = await r.json();
     const build = parseInt(String(j.tag_name || '').replace(/\D/g, ''), 10) || 0;
     const apk = (j.assets || []).find(a => /\.apk$/i.test(a.name));
@@ -1695,6 +1703,10 @@ async function checkApkUpdate(manual = false) {
     if (apk && build > (self.APP_BUILD || 0)) showApkUpdate(j, apk);
     else if (manual) toast(`У тебя последняя версия ${self.APP_VERSION} (сборка ${self.APP_BUILD})`);
   } catch (e) { l?.close(); if (manual) toast('Не удалось проверить: ' + e.message); }
+}
+function openReleases() {
+  if (self.APP_REPO) N.openUrl(`https://github.com/${self.APP_REPO}/releases`);
+  else toast('Адрес репозитория неизвестен');
 }
 function showApkUpdate(rel, apk) {
   if ($('.update-banner')) return;

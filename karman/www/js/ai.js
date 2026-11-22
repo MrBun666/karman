@@ -3,9 +3,11 @@
 import * as U from './util.js';
 import * as F from './finance.js';
 
-// Встроенный бесплатный ключ Gemini — ИИ работает сразу после установки.
+// Встроенный бесплатный ключ Gemini попадает в приложение при сборке из секрета
+// GitHub AI_API_KEY (файл build-info.js) — ИИ работает сразу после установки.
+// В коде репозитория ключа нет, поэтому репозиторий можно сделать публичным.
 // Свой ключ в настройках (если введён) заменяет встроенный.
-const BUILT_IN_KEY = 'AQ.Ab8RN6IC5fm9s9elbrxwmTyFR-0szRMHcy9R-fX7prDKWbnfzg';
+const BUILT_IN_KEY = '';
 
 export const MODELS = [
   { id: 'gemini-3.8-flash', provider: 'gemini', name: 'Gemini 3.8 Flash — самая умная из бесплатных (рекомендую)' },
