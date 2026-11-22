@@ -12,9 +12,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -44,6 +44,7 @@ jobs:
         env:
           KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          AI_KEY: ${{ secrets.AI_API_KEY }}
         run: |
           cd "$APP_DIR"
           VERSION=$(node -e "global.self={};require(process.cwd()+'/www/js/version.js');console.log(self.APP_VERSION)")
@@ -54,6 +55,8 @@ jobs:
           ASSETS=android/app/src/main/assets
           rm -rf "$ASSETS/www" && mkdir -p "$ASSETS" && cp -r www "$ASSETS/www"
           printf "self.APP_BUILD = %s;\nself.APP_REPO = '%s';\n" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" > "$ASSETS/www/js/build-info.js"
+          node -e "console.log('self.APP_AI_KEY = ' + JSON.stringify((process.env.AI_KEY || '').trim()) + ';')" >> "$ASSETS/www/js/build-info.js"
+          if [ -z "$AI_KEY" ]; then echo "::warning::Нет секрета AI_API_KEY — ИИ заработает, только если вписать ключ в настройках приложения."; fi
 
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
             echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/karman.jks"
