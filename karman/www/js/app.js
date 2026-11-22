@@ -664,9 +664,11 @@ function vSettings() {
       </div>
       <label class="field"><span class="lbl">Счёт для быстрого ввода</span>${accChips('defaultAccount', st.defaultAccount)}</label>
       <h2 class="mt12">ИИ (Claude)</h2>
-      <label class="field"><span class="lbl">Ключ ИИ (Gemini или Claude)</span><input name="apiKey" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="${AI.hasBuiltInKey() ? 'встроенный ключ Gemini уже подключён' : 'AQ.… или AIza… (Gemini), sk-ant-… (Claude)'}"></label>
-      ${AI.hasBuiltInKey() ? '<p class="small pos">✓ Встроенный ключ Gemini подключён. Поле можно оставить пустым.</p>' : ''}
-      <label class="field"><span class="lbl">Модель</span><select name="model">${AI.MODELS.map(m => `<option value="${m.id}" ${m.id === st.model ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}${!AI.MODELS.some(m => m.id === st.model) ? `<option value="${esc(st.model)}" selected>${esc(st.model)}</option>` : ''}</select></label>
+      <p class="small pos">✓ ИИ уже подключён — бесплатный Google Gemini, ничего вводить не нужно.</p>
+      <label class="field"><span class="lbl">Модель ИИ</span><select name="model">${AI.MODELS.map(m => `<option value="${m.id}" ${m.id === st.model ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}<option value="__custom" ${!AI.FREE_IDS.includes(st.model) ? 'selected' : ''}>Своя модель…</option></select></label>
+      <label class="field" id="custw" ${AI.FREE_IDS.includes(st.model) ? 'hidden' : ''}><span class="lbl">ID своей модели</span><input name="customModel" autocomplete="off" autocapitalize="off" spellcheck="false" value="${AI.FREE_IDS.includes(st.model) ? '' : esc(st.model)}" placeholder="например gemini-3.1-pro-preview"></label>
+      <details class="small"><summary class="muted">Хочу модель мощнее</summary><p class="muted">Выбери «Своя модель…» и впиши её ID (например, <b>gemini-3.1-pro-preview</b>). Мощные модели обычно платные: для них вставь ниже свой ключ с подключённой оплатой. Ключ <b>sk-ant-…</b> переключит приложение на Claude (ID вроде claude-opus-5-5). Если своя модель не ответит, приложение само вернётся к бесплатной.</p>
+      <label class="field"><span class="lbl">Свой ключ ИИ (необязательно)</span><input name="apiKey" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="пусто — используется встроенный бесплатный"></label></details>
       <p class="small muted">Бесплатный ключ Gemini: aistudio.google.com → Get API key. Если лимит выбранной модели закончится, приложение само переключится на запасную. Ключ хранится только на телефоне и не попадает в резервную копию.</p>
       <div class="row gap"><button class="btn primary grow">Сохранить</button><button type="button" class="btn grow" data-a="ai-test">Проверить ИИ</button></div>
     </form>
@@ -702,6 +704,8 @@ function vSettings() {
         else return;
         save(); scheduleSync(); toast('Сохранено');
       });
+      const setf = $('#setf', v);
+      setf.elements.model.onchange = () => { $('#custw', v).hidden = setf.elements.model.value !== '__custom'; if (!$('#custw', v).hidden) setf.elements.customModel.focus(); };
       $('#setf', v).onsubmit = e => {
         e.preventDefault();
         const f = e.target;
@@ -710,12 +714,20 @@ function vSettings() {
           name: fv(f, 'name').trim(), payday: pd >= 1 && pd <= 31 ? pd : null,
           monthlyIncome: U.parseAmount(fv(f, 'monthlyIncome')) || null,
           defaultAccount: fv(f, 'defaultAccount') || S.settings.defaultAccount,
-          apiKey: fv(f, 'apiKey').trim(), model: fv(f, 'model'),
+          apiKey: fv(f, 'apiKey').trim(), model: readModel(f),
         });
         commit('Сохранено');
       };
     },
   };
+}
+
+function readModel(f) {
+  if (fv(f, 'model') !== '__custom') return fv(f, 'model');
+  const id = fv(f, 'customModel').trim().replace(/^models\//, '');
+  if (/^[a-z0-9][a-z0-9._-]{2,80}$/i.test(id)) return id;
+  if (id) toast('Странный ID модели — оставил бесплатную');
+  return AI.FREE_IDS[0];
 }
 
 // ============ Формы ============
@@ -1502,7 +1514,7 @@ const A = {
   },
   'ai-test': async () => {
     const f = $('#setf');
-    if (f) { S.settings.apiKey = fv(f, 'apiKey').trim(); S.settings.model = fv(f, 'model'); save(); }
+    if (f) { S.settings.apiKey = fv(f, 'apiKey').trim(); S.settings.model = readModel(f); save(); }
     const l = loading('Проверяю…');
     try { const m = await AI.ping(S); l.close(); toast(`✅ ИИ работает · ${m}`); }
     catch (e) { l.close(); toast(e.message === 'NO_KEY' ? 'Введи ключ' : e.message); }

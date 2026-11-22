@@ -3,24 +3,31 @@
 import * as U from './util.js';
 import * as F from './finance.js';
 
+// Встроенный бесплатный ключ Gemini — ИИ работает сразу после установки.
+// Свой ключ в настройках (если введён) заменяет встроенный.
+const BUILT_IN_KEY = 'AQ.Ab8RN6IC5fm9s9elbrxwmTyFR-0szRMHcy9R-fX7prDKWbnfzg';
+
 export const MODELS = [
   { id: 'gemini-3.8-flash', provider: 'gemini', name: 'Gemini 3.8 Flash — самая умная из бесплатных (рекомендую)' },
   { id: 'gemini-3.6-flash', provider: 'gemini', name: 'Gemini 3.6 Flash — бесплатная, запасная' },
   { id: 'gemini-3.5-flash-lite', provider: 'gemini', name: 'Gemini 3.5 Flash-Lite — бесплатная, самая быстрая' },
-  { id: 'claude-sonnet-5-5', provider: 'claude', name: 'Claude Sonnet 5.5 — платно, нужен ключ sk-ant-…' },
-  { id: 'claude-opus-5-5', provider: 'claude', name: 'Claude Opus 5.5 — платно, самый умный' },
 ];
+export const FREE_IDS = MODELS.map(m => m.id);
 
-export const apiKey = S => String(S.settings.apiKey || self.APP_AI_KEY || '').trim();
+const builtIn = () => String(self.APP_AI_KEY || BUILT_IN_KEY || '').trim();
+export const apiKey = S => String(S.settings.apiKey || builtIn()).trim();
 export const hasKey = S => !!apiKey(S);
-export const hasBuiltInKey = () => !!String(self.APP_AI_KEY || '').trim();
+export const hasBuiltInKey = () => !!builtIn();
+export const usingOwnKey = S => !!String(S.settings.apiKey || '').trim();
 export const provider = S => apiKey(S).startsWith('sk-ant-') ? 'claude' : 'gemini';
 
-// Выбранная модель + запасные того же провайдера (если лимит исчерпан или модель недоступна)
+// Выбранная модель (в т.ч. своя, вписанная вручную) + бесплатные запасные,
+// на которые приложение переключится, если лимит исчерпан или модель недоступна.
 function modelChain(S) {
-  const list = MODELS.filter(m => m.provider === provider(S)).map(m => m.id);
-  const chosen = list.includes(S.settings.model) ? S.settings.model : list[0];
-  return [...new Set([chosen, ...list])];
+  const chosen = String(S.settings.model || '').trim();
+  if (provider(S) === 'claude') return [/^claude/.test(chosen) ? chosen : 'claude-sonnet-5-5'];
+  const first = chosen && !/^claude/.test(chosen) ? chosen : FREE_IDS[0];
+  return [...new Set([first, ...FREE_IDS])];
 }
 
 // ---------- Claude ----------
@@ -91,7 +98,8 @@ async function geminiCall(S, body) {
     let msg = '', status = '';
     try { const e = (await res.json()).error || {}; msg = e.message || ''; status = e.status || ''; } catch { /* */ }
     const err = geminiError(res.status, status, msg);
-    if ([404, 429, 500, 503].includes(res.status)) { // пробуем запасную модель, эту на время пропускаем
+    const custom = !FREE_IDS.includes(model); // своя модель могла не подойти к ключу — тогда уходим на бесплатную
+    if ([404, 429, 500, 503].includes(res.status) || (custom && [400, 401, 403].includes(res.status) && !/API.?key|API_KEY/i.test(msg + status))) { // пробуем запасную модель, эту на время пропускаем
       cooldown[model] = Date.now() + (res.status === 404 ? 6 * 3600e3 : 60e3);
       lastErr = err; continue;
     }
