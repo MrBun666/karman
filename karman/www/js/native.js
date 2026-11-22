@@ -17,6 +17,8 @@ export const schedule = list => isNative && safe(() => NB.schedule(JSON.stringif
 export const widget = d => isNative && safe(() => NB.updateWidget(JSON.stringify(d)));
 export const takeShared = () => isNative ? parse(safe(() => NB.takeShared(), ''), null) : null;
 export const voice = () => isNative && safe(() => NB.startVoice());
+export const scanQr = () => isNative && typeof NB.scanQr === 'function' && (safe(() => NB.scanQr()), true);
+export const loadPageText = url => isNative && typeof NB.loadPageText === 'function' && (safe(() => NB.loadPageText(url)), true);
 export const shareText = (title, text) => isNative && safe(() => NB.shareText(title, text));
 export const shareFile = (name, mime, b64) => isNative && safe(() => NB.shareFile(name, mime, b64), false);
 export function openUrl(url) {

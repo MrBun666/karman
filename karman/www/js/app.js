@@ -11,7 +11,7 @@ const APP = self.APP_NAME || 'Карман';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = U.esc, money = U.money;
-const ui = { repKind: 'week', repDate: U.today(), txMonth: U.curYm(), calMonth: U.curYm(), calDay: U.today(), statsMonth: U.curYm(), txFilter: 'all', txSearch: '', chatBusy: false, debtExtra: null, priceQ: '' };
+const ui = { repKind: 'week', repDate: U.today(), txMonth: U.curYm(), calMonth: U.curYm(), calDay: U.today(), statsMonth: U.curYm(), txFilter: 'all', txSearch: '', chatBusy: false, debtExtra: null, priceQ: '', priceTab: 'receipts' };
 let swReg = null, updating = false, hiddenAt = 0, locked = false;
 
 // ============ Общие элементы ============
@@ -157,7 +157,7 @@ const ROUTES = {
   debts: { title: 'Кредиты', tab: 'more', back: 'more', render: vDebts },
   stats: { title: 'Аналитика', tab: 'more', back: 'more', render: vStats },
   reports: { title: 'Отчёты', tab: 'more', back: 'home', render: vReports },
-  prices: { title: 'Цены по чекам', tab: 'more', back: 'more', render: vPrices },
+  prices: { title: 'Чеки и цены', tab: 'more', back: 'more', render: vPrices },
   learn: { title: 'Финграмотность', tab: 'more', back: 'more', render: vLearn },
   import: { title: 'Импорт', tab: 'more', back: 'more', render: vImport },
   settings: { title: 'Настройки', tab: 'more', back: 'more', render: vSettings },
@@ -212,7 +212,7 @@ function vHome() {
     <button data-a="add" data-type="expense"><i>➖</i>Расход</button>
     <button data-a="add" data-type="income"><i>➕</i>Доход</button>
     <button data-a="voice"><i>🎤</i>Голосом</button>
-    <button data-a="receipt"><i>🧾</i>Чек</button>
+    <button data-a="receipt-menu"><i>🧾</i>Чек</button>
     <button data-a="import-pdf"><i>📄</i>Kaspi</button>
   </section>
 
@@ -404,7 +404,7 @@ async function sendChat(text) {
 function vMore() {
   const items = [
     ['goals', '🎯', 'Цели', 'Накопления и план'], ['debts', '🏦', 'Кредиты', 'Как закрыть быстрее'],
-    ['reports', '📈', 'Отчёты', 'День, неделя, месяц'], ['stats', '📊', 'Аналитика', 'Куда уходят деньги'], ['prices', '🏷️', 'Цены по чекам', 'Где дешевле'],
+    ['reports', '📈', 'Отчёты', 'День, неделя, месяц'], ['stats', '📊', 'Аналитика', 'Куда уходят деньги'], ['prices', '🧾', 'Чеки и цены', 'Где что дешевле'],
     ['import', '📥', 'Импорт', 'Kaspi, чеки, текст'], ['learn', '📚', 'Финграмотность', 'Короткие уроки'],
     ['settings', '⚙️', 'Настройки', 'Счета, ИИ, PIN'],
   ];
@@ -604,27 +604,204 @@ function vStats() {
   return { html };
 }
 
-// ----- Цены -----
+// ----- Чеки и цены -----
 function vPrices() {
-  const idx = F.priceIndex(S);
-  const q = ui.priceQ.toLowerCase();
-  const list = q ? idx.filter(x => x.name.toLowerCase().includes(q)) : idx;
+  const tabs = [['receipts', 'Чеки'], ['products', 'Товары'], ['stores', 'Где дешевле']];
   const html = `
-    <div class="search"><input id="pq" type="search" placeholder="🔍 Найти товар: молоко, хлеб…" value="${esc(ui.priceQ)}"></div>
-    <div id="plist">${pricesListHtml(list, idx.length)}</div>`;
+    <div class="seg rep-seg">${tabs.map(([k, l]) => `<button class="${ui.priceTab === k ? 'on' : ''}" data-a="price-tab" data-k="${k}">${l}</button>`).join('')}</div>
+    ${ui.priceTab !== 'stores' ? `<div class="search"><input id="pq" type="search" placeholder="${ui.priceTab === 'receipts' ? '🔍 Магазин или товар' : '🔍 Найти товар: молоко, хлеб…'}" value="${esc(ui.priceQ)}"></div>` : ''}
+    <div id="plist">${priceTabHtml()}</div>`;
   return {
     html, mount(v) {
-      $('#pq', v).oninput = e => { ui.priceQ = e.target.value; const qq = ui.priceQ.toLowerCase(); $('#plist').innerHTML = pricesListHtml(qq ? idx.filter(x => x.name.toLowerCase().includes(qq)) : idx, idx.length); };
+      const q = $('#pq', v);
+      if (q) q.oninput = e => { ui.priceQ = e.target.value; $('#plist').innerHTML = priceTabHtml(); };
     },
   };
 }
-function pricesListHtml(list, total) {
-  if (!total) return '<div class="empty">Сфотографируй несколько чеков — здесь появятся цены на товары, их изменение и магазины, где дешевле.</div>';
-  if (!list.length) return '<div class="empty">Не найдено</div>';
-  return `<div class="card list">${list.slice(0, 150).map(x => {
-    const ch = x.first.price ? (x.last.price / x.first.price - 1) * 100 : 0;
-    return `<div class="tx" data-a="price-open" data-k="${esc(x.name.toLowerCase())}"><div class="grow min0"><div class="t1">${esc(x.name)}</div><div class="sub">${x.count}× · мин ${money(x.min)} · ${esc(x.last.store)}</div></div><div class="amt">${money(x.last.price)}${x.count > 1 && Math.abs(ch) >= 1 ? `<div class="small ${ch > 0 ? 'neg' : 'pos'}">${ch > 0 ? '▲' : '▼'}${Math.abs(Math.round(ch))}%</div>` : ''}</div></div>`;
-  }).join('')}</div>`;
+function priceTabHtml() {
+  const q = F.productKey(ui.priceQ);
+  if (ui.priceTab === 'receipts') {
+    let list = F.receipts(S);
+    const total = list.length;
+    if (q) list = list.filter(t => F.productKey(F.storeName(t)).includes(q) || t.items.some(i => F.productKey(i.name).includes(q)));
+    const monthSum = U.sum(F.receipts(S).filter(t => t.date.startsWith(U.curYm())), t => t.amount);
+    return `<div class="row gap"><button class="btn primary grow" data-a="receipt-qr">🔳 QR-код</button><button class="btn grow" data-a="receipt">📷 Фото</button><button class="btn grow" data-a="receipt-new">✍️ Вручную</button></div>
+      ${total ? `<p class="small muted">Чеков: ${total} · в этом месяце на ${money(monthSum)}</p>` : ''}
+      ${!total ? '<div class="empty">Чеков пока нет. Сфотографируй чек — ИИ разберёт товары и цены. Потом здесь появится, где что дешевле.</div>'
+      : !list.length ? '<div class="empty">Не найдено</div>'
+      : `<div class="card list">${list.slice(0, 200).map(t => `<div class="tx" data-a="receipt-edit" data-id="${t.id}"><div class="ic">🧾</div><div class="grow min0"><div class="t1">${esc(F.storeName(t))}</div><div class="sub">${U.fmtDateRel(t.date)} · ${t.items.length} поз. · ${esc(t.items.slice(0, 3).map(i => i.name).join(', '))}</div></div><div class="amt">${money(t.amount)}</div></div>`).join('')}</div>`}`;
+  }
+  const idx = F.priceIndex(S);
+  if (!idx.length) return '<div class="empty">Сфотографируй несколько чеков из разных магазинов — здесь появится, где и какие продукты дешевле.</div>';
+  if (ui.priceTab === 'products') {
+    const list = q ? idx.filter(x => x.key.includes(q)) : idx;
+    if (!list.length) return '<div class="empty">Не найдено</div>';
+    return `<p class="small muted">Нажми на товар — увидишь цены во всех магазинах.</p><div class="card list">${list.slice(0, 200).map(x => {
+      const ch = x.count > 1 && Math.abs(x.change) >= 1 ? `<div class="small ${x.change > 0 ? 'neg' : 'pos'}">${x.change > 0 ? '▲' : '▼'}${Math.abs(Math.round(x.change))}%</div>` : '';
+      const where = x.stores.length > 1 ? `дешевле в ${esc(x.cheapest.name)} — ${money(x.cheapest.avg)}` : esc(x.last.store);
+      return `<div class="tx" data-a="price-open" data-k="${esc(x.key)}"><div class="grow min0"><div class="t1">${esc(x.name)}</div><div class="sub">${x.count}× · ${where}</div></div><div class="amt">${money(x.last.price)}${ch}</div></div>`;
+    }).join('')}</div>`;
+  }
+  // Где дешевле
+  const stores = F.storeIndex(S, idx);
+  const ranked = stores.filter(st => st.index != null);
+  const saves = idx.filter(x => x.overpay >= 50).sort((a, b) => b.overpay - a.overpay);
+  const totalSave = U.sum(saves, x => x.overpay);
+  const maxIdx = Math.max(1.0001, ...ranked.map(st => st.index));
+  return `
+    ${ranked.length ? `<div class="card"><div class="card-h"><h2>Рейтинг магазинов</h2></div>
+      <p class="small muted">Сравниваются одинаковые товары, купленные в разных магазинах. 0% — самый дешёвый вариант.</p>
+      ${ranked.map((st, i) => { const pct = Math.round((st.index - 1) * 100); return `<div class="cb2"><div class="row"><span>${i === 0 ? '🏆 ' : ''}${esc(st.name)}</span><span><b class="${pct === 0 ? 'pos' : ''}">${pct === 0 ? 'дешевле всех' : '+' + pct + '%'}</b></span></div>${bar((st.index - 1) / (maxIdx - 1 || 1), 'series')}<div class="small muted">сравнено товаров: ${st.compared} · самый дешёвый по ${st.cheapest} · визитов ${st.visits} · ${money(st.spent)}</div></div>`; }).join('')}</div>`
+      : `<div class="card"><p class="small muted">Чтобы сравнить магазины, нужны одинаковые товары из разных магазинов. Фотографируй чеки и там, и там — сравнение появится само. Если один товар называется по-разному, переименуй его в «Товарах», и записи объединятся.</p></div>`}
+    ${saves.length ? `<div class="card"><div class="card-h"><h2>Где можно сэкономить</h2></div>
+      <p class="small">Если бы эти товары покупал там, где дешевле, сэкономил бы <b class="pos">${money(totalSave)}</b>.</p>
+      ${saves.slice(0, 15).map(x => { const dear = x.stores[x.stores.length - 1]; const diff = Math.round((1 - x.cheapest.avg / dear.avg) * 100); return `<div class="row li" data-a="price-open" data-k="${esc(x.key)}"><span class="min0"><b>${esc(x.name)}</b><br><span class="small muted">в ${esc(x.cheapest.name)} ${money(x.cheapest.avg)}, в ${esc(dear.name)} ${money(dear.avg)} (−${diff}%)</span></span><b class="pos">${money(x.overpay)}</b></div>`; }).join('')}</div>` : ''}
+    ${stores.length ? `<div class="card"><div class="card-h"><h2>Траты по магазинам (по чекам)</h2></div>${[...stores].sort((a, b) => b.spent - a.spent).map(st => `<div class="row li"><span>${esc(st.name)} <span class="small muted">· ${st.visits} ${U.plural(st.visits, 'чек', 'чека', 'чеков')}</span></span><b>${money(st.spent)}</b></div>`).join('')}</div>` : ''}`;
+}
+
+function openProduct(key) {
+  const x = F.priceIndex(S).find(p => p.key === key);
+  if (!x) return;
+  const best = x.cheapest.avg;
+  const html = `
+    <div class="trio"><div><span class="muted small">Последняя</span><b>${money(x.last.price)}</b></div><div><span class="muted small">Мин</span><b class="pos">${money(x.min)}</b></div><div><span class="muted small">Макс</span><b>${money(x.max)}</b></div></div>
+    ${x.count > 1 && Math.abs(x.change) >= 1 ? `<p class="small mt6">С ${U.fmtDate(x.first.date)} цена ${x.change > 0 ? 'выросла' : 'снизилась'} на <b class="${x.change > 0 ? 'neg' : 'pos'}">${Math.abs(Math.round(x.change))}%</b>.</p>` : ''}
+    <div class="field mt12"><span class="lbl">Цены по магазинам (за штуку/единицу)</span>
+      <table class="tbl small"><thead><tr><th>Магазин</th><th>Средняя</th><th>Мин</th><th>Раз</th></tr></thead><tbody>
+      ${x.stores.map((st, i) => `<tr class="${i === 0 && x.stores.length > 1 ? 'best' : ''}"><td>${i === 0 && x.stores.length > 1 ? '🏆 ' : ''}${esc(st.name)}</td><td>${money(st.avg)}${i > 0 ? `<div class="small neg">+${Math.round((st.avg / best - 1) * 100)}%</div>` : ''}</td><td>${money(st.min)}</td><td>${st.count}</td></tr>`).join('')}
+      </tbody></table></div>
+    ${x.overpay >= 1 ? `<p class="small">Переплата по сравнению с покупкой в ${esc(x.cheapest.name)}: <b class="neg">${money(x.overpay)}</b>.</p>` : ''}
+    <div class="field"><span class="lbl">История покупок</span>${[...x.entries].reverse().map(e => `<div class="row li small" data-a="receipt-edit" data-id="${e.txId}"><span>${U.fmtDate(e.date)} · ${esc(e.store)}${e.qty !== 1 ? ` · ${e.qty} шт.` : ''}</span><b>${money(e.price)}</b></div>`).join('')}</div>
+    <button class="btn ghost block mt12" data-m="rename">✏️ Переименовать товар (объединить с другим)</button>`;
+  sheet(html, {
+    title: x.name, onMount(r, close) {
+      $('[data-m=rename]', r).onclick = () => { close(); setTimeout(() => renameProduct(x), 60); };
+    },
+  });
+}
+function renameProduct(x) {
+  const names = F.priceIndex(S).filter(p => p.key !== x.key).map(p => p.name).slice(0, 300);
+  sheet(`<form class="form" id="rnf"><label class="field"><span class="lbl">Новое название для всех покупок «${esc(x.name)}»</span><input name="n" list="prodnames" value="${esc(x.name)}" autocomplete="off"></label>
+    <datalist id="prodnames">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <p class="small muted">Если выбрать название другого товара, их цены объединятся — так удобно, когда один товар в разных магазинах записан по-разному.</p>
+    <button class="btn primary block">Сохранить</button></form>`, {
+    title: 'Переименовать', onMount(r, close) {
+      const f = $('#rnf', r);
+      f.onsubmit = e => {
+        e.preventDefault();
+        const n = fv(f, 'n').trim();
+        if (!n) return;
+        let k = 0;
+        for (const t of S.transactions) for (const it of t.items || []) if (F.productKey(it.name) === x.key) { it.name = n; k++; }
+        close(); commit(`Переименовано: ${k}`);
+      };
+    },
+  });
+}
+
+// Редактор чека: магазин, дата, позиции (добавить/изменить/удалить), удаление чека
+function openReceiptEditor(txId = null, preset = {}) {
+  const tx = txId ? S.transactions.find(t => t.id === txId) : null;
+  if (txId && !tx) return;
+  const fromBank = !!tx && tx.source !== 'receipt' && tx.source !== 'manual';
+  const items = (tx?.items || []).map(i => ({ ...i }));
+  if (!items.length) items.push({ name: '', qty: 1, price: '', sum: '', categoryId: 'food' });
+  const st = { store: tx ? F.storeName(tx) : (preset.store || ''), date: tx?.date || preset.date || U.today(), accountId: tx?.accountId || S.settings.defaultAccount };
+  const rowHtml = (it, i) => `<div class="ritem" data-i="${i}">
+      <div class="row"><input class="rname" data-f="name" value="${esc(it.name)}" placeholder="Название товара"><button type="button" class="rdel" data-del="${i}" aria-label="Удалить позицию">✕</button></div>
+      <div class="rnums"><input data-f="qty" inputmode="decimal" value="${it.qty ?? 1}" aria-label="Количество"><span>×</span><input data-f="price" inputmode="decimal" value="${it.price ?? ''}" placeholder="цена" aria-label="Цена"><span>=</span><input data-f="sum" inputmode="decimal" value="${it.sum ?? ''}" placeholder="сумма" aria-label="Сумма"></div>
+      ${catSelect('expense', it.categoryId, 'data-f="categoryId" class="mini"')}
+    </div>`;
+  const html = `<form class="form" id="ref" autocomplete="off">
+    <div class="row2"><label class="field"><span class="lbl">Магазин</span><input name="store" value="${esc(st.store)}" placeholder="Magnum, Small…"></label>
+    <label class="field"><span class="lbl">Дата</span><input type="date" name="date" value="${st.date}" ${fromBank ? 'disabled' : ''}></label></div>
+    ${fromBank ? `<p class="small muted">Чек прикреплён к операции из банка на ${money(tx.amount)} — сумма и дата берутся из банка.</p>` : `<div class="field"><span class="lbl">Оплата</span>${accChips('acc', st.accountId)}</div>`}
+    <div class="field"><span class="lbl">Позиции</span><div id="ritems">${items.map(rowHtml).join('')}</div>
+      <button type="button" class="btn ghost small mt6" id="radd">+ Позиция</button></div>
+    <div class="row li"><span>Сумма позиций</span><b id="rsum"></b></div>
+    ${fromBank ? '' : `<label class="field"><span class="lbl">Итого по чеку, ₸</span><input name="total" inputmode="decimal" value="${tx?.amount ?? preset.total ?? ''}" placeholder="пусто — сумма позиций"></label>`}
+    <p class="small warn" id="rwarn" hidden></p>
+    <div class="actions">${tx ? '<button type="button" class="btn ghost danger" data-delr>Удалить</button>' : ''}<button class="btn primary grow">Сохранить</button></div>
+  </form>`;
+  sheet(html, {
+    title: tx ? '🧾 Чек' : '🧾 Новый чек', full: true, onMount(r, close) {
+      const f = $('#ref', r), box = $('#ritems', r);
+      const read = () => $$('.ritem', box).map(row => {
+        const g = k => row.querySelector(`[data-f="${k}"]`).value;
+        return { name: g('name').trim(), qty: U.parseAmount(g('qty')) || 1, price: U.parseAmount(g('price')), sum: U.parseAmount(g('sum')), categoryId: g('categoryId') };
+      });
+      const totals = () => {
+        const list = read().filter(i => i.name && i.sum > 0);
+        const sm = U.sum(list, i => i.sum);
+        $('#rsum', r).textContent = money(sm);
+        const target = fromBank ? tx.amount : U.parseAmount(fv(f, 'total'));
+        const w = $('#rwarn', r);
+        w.hidden = !(target > 0 && Math.abs(target - sm) > 1);
+        w.textContent = `Сумма позиций ${money(sm)} не совпадает с итогом ${money(target)} — проверь.`;
+      };
+      box.addEventListener('input', e => {
+        const row = e.target.closest('.ritem');
+        if (!row) return;
+        const q = row.querySelector('[data-f=qty]'), pr = row.querySelector('[data-f=price]'), su = row.querySelector('[data-f=sum]');
+        const qty = U.parseAmount(q.value) || 1;
+        if (e.target === q || e.target === pr) { const p = U.parseAmount(pr.value); if (p > 0) su.value = Math.round(p * qty * 100) / 100; }
+        else if (e.target === su) { const sm = U.parseAmount(su.value); if (sm > 0) pr.value = Math.round(sm / qty * 100) / 100; }
+        totals();
+      });
+      box.addEventListener('click', e => {
+        const d = e.target.closest('[data-del]');
+        if (!d) return;
+        d.closest('.ritem').remove();
+        totals();
+      });
+      $('#radd', r).onclick = () => {
+        box.insertAdjacentHTML('beforeend', rowHtml({ name: '', qty: 1, price: '', sum: '', categoryId: read().at(-1)?.categoryId || 'food' }, Date.now()));
+        box.lastElementChild.querySelector('.rname').focus();
+      };
+      f.elements.total?.addEventListener('input', totals);
+      totals();
+      $('[data-delr]', r)?.addEventListener('click', () => deleteReceipt(tx, close));
+      f.onsubmit = e => {
+        e.preventDefault();
+        const list = read().filter(i => i.name && i.sum > 0).map(i => ({ ...i, price: i.price > 0 ? i.price : Math.round(i.sum / i.qty * 100) / 100 }));
+        if (!list.length) { toast('Добавь хотя бы одну позицию с названием и суммой'); return; }
+        const store = fv(f, 'store').trim() || 'Без названия';
+        const byCat = {};
+        list.forEach(i => { byCat[i.categoryId] = (byCat[i.categoryId] || 0) + i.sum; });
+        const mainCat = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0][0];
+        if (tx) {
+          tx.items = list; tx.receiptStore = store; tx.categoryId = mainCat;
+          if (!fromBank) {
+            Object.assign(tx, { date: fv(f, 'date') || tx.date, accountId: fv(f, 'acc') || tx.accountId, amount: U.parseAmount(fv(f, 'total')) || U.sum(list, i => i.sum), note: store, merchant: store });
+          }
+        } else {
+          S.transactions.push({ id: U.uid(), type: 'expense', amount: U.parseAmount(fv(f, 'total')) || U.sum(list, i => i.sum), categoryId: mainCat, accountId: fv(f, 'acc') || S.settings.defaultAccount, date: fv(f, 'date') || U.today(), note: store, merchant: store, receiptStore: store, items: list, receiptLink: preset.link || null, source: 'receipt', created: Date.now() });
+        }
+        close(); commit('Чек сохранён');
+      };
+    },
+  });
+}
+
+function deleteReceipt(tx, closeEditor) {
+  const fromBank = tx.source !== 'receipt' && tx.source !== 'manual';
+  if (!fromBank) {
+    ask('Удалить чек?', `Чек «${esc(F.storeName(tx))}» на ${money(tx.amount)} и эта трата удалятся.`, 'Удалить', true).then(ok => {
+      if (!ok) return;
+      deleteTx(tx.id); closeEditor(); commit('Чек удалён');
+    });
+    return;
+  }
+  sheet(`<p class="small">Этот чек прикреплён к операции из банка на ${money(tx.amount)}.</p>
+    <div class="menu"><button data-m="items"><i>🧾</i>Удалить только чек — операция останется</button><button data-m="all"><i>🗑️</i>Удалить операцию вместе с чеком</button></div>`, {
+    title: 'Удалить чек?', onMount(r, close) {
+      $$('[data-m]', r).forEach(b => b.onclick = () => {
+        if (b.dataset.m === 'items') { delete tx.items; delete tx.receiptStore; delete tx.receiptLink; }
+        else deleteTx(tx.id);
+        close(); closeEditor(); commit(b.dataset.m === 'items' ? 'Чек удалён, операция осталась' : 'Удалено');
+      });
+    },
+  });
 }
 
 // ----- Уроки -----
@@ -641,7 +818,8 @@ function vImport() {
       <p class="small muted mt6">Повторный импорт той же выписки не создаст дублей.</p></div>
     <div class="card"><h2>🧾 Чек из магазина</h2>
       <p class="small muted">Сфотографируй чек целиком — ИИ прочитает товары и цены и разложит по категориям. Если покупка уже есть из Kaspi, чек прикрепится к ней.</p>
-      <button class="btn primary block" data-a="receipt">Сфотографировать или выбрать фото</button></div>
+      <div class="row gap"><button class="btn primary grow" data-a="receipt-qr">🔳 По QR-коду</button><button class="btn grow" data-a="receipt">📷 По фото</button></div>
+      <p class="small muted mt6">По QR-коду товары берутся прямо с сайта оператора фискальных данных — точнее, чем по фото.</p></div>
     <div class="card"><h2>📋 Текст уведомлений или SMS</h2>
       <p class="small muted">Скопируй текст пушей Kaspi (можно несколько сразу) и вставь — операции распознаются.</p>
       <button class="btn block" data-a="paste">Вставить текст</button></div>
@@ -746,7 +924,7 @@ function openTxForm(tx = null, preset = {}) {
     <div class="field"><span class="lbl" id="acclbl">Счёт</span>${accChips('acc', t.accountId)}</div>
     <div class="field" id="towrap"><span class="lbl">Куда</span>${accChips('to', t.toAccountId || otherAcc)}</div>
     <label class="field"><span class="lbl">Дата</span><input type="date" name="date" value="${t.date}"></label>
-    ${t.items?.length ? `<div class="field"><span class="lbl">Позиции чека</span><div class="items">${t.items.map((it, i) => `<div class="item"><div class="grow min0"><div>${esc(it.name)}</div><div class="small muted">${it.qty && it.qty !== 1 ? it.qty + ' × ' + money(it.price) : ''}</div></div><b>${money(it.sum)}</b>${catSelect('expense', it.categoryId, `data-item="${i}" class="mini"`)}</div>`).join('')}</div></div>` : ''}
+    ${t.items?.length ? `<button type="button" class="btn block" data-open-receipt>🧾 Открыть чек: ${esc(F.storeName(t))}, ${t.items.length} поз. — изменить или удалить</button>` : ''}
     ${t.receiptLink ? `<a class="small" href="${esc(t.receiptLink)}" target="_blank" rel="noopener">🔗 Чек в ОФД</a>` : ''}
     ${t.source === 'kaspi' && t.merchant ? `<div class="small muted">Из выписки Kaspi: ${esc(t.op || '')} · ${esc(t.merchant)}</div>` : ''}
     <div class="actions">${!isNew ? '<button type="button" class="btn ghost danger" data-del>Удалить</button>' : ''}<button class="btn primary grow">Сохранить</button></div>
@@ -780,6 +958,7 @@ function openTxForm(tx = null, preset = {}) {
         if (r) r.checked = true;
       };
       if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
+      $('[data-open-receipt]', root)?.addEventListener('click', () => { close(); setTimeout(() => openReceiptEditor(tx.id), 60); });
       $('[data-del]', root)?.addEventListener('click', async () => {
         if (!(await ask('Удалить операцию?', esc(txTitle(tx)) + ' · ' + money(tx.amount), 'Удалить', true))) return;
         deleteTx(tx.id); close(); commit('Удалено');
@@ -827,7 +1006,7 @@ function deleteTx(id) {
 function openAddMenu() {
   sheet(`<div class="menu">
     <button data-m="expense"><i>➖</i>Расход</button><button data-m="income"><i>➕</i>Доход</button>
-    <button data-m="transfer"><i>🔄</i>Перевод между счетами</button><button data-m="receipt"><i>🧾</i>Чек по фото</button>
+    <button data-m="transfer"><i>🔄</i>Перевод между счетами</button><button data-m="qr"><i>🔳</i>Чек по QR-коду</button><button data-m="receipt"><i>🧾</i>Чек по фото</button>
     <button data-m="pdf"><i>📄</i>Выписка Kaspi</button><button data-m="paste"><i>📋</i>Вставить текст</button>
     <button data-m="event"><i>📅</i>Платёж в календарь</button></div>`, {
     title: 'Добавить', onMount(r, close) {
@@ -836,6 +1015,7 @@ function openAddMenu() {
         setTimeout(() => {
           if (['expense', 'income', 'transfer'].includes(m)) openTxForm(null, { type: m });
           else if (m === 'receipt') A.receipt();
+          else if (m === 'qr') startQrScan();
           else if (m === 'pdf') A['import-pdf']();
           else if (m === 'paste') openPasteSheet();
           else if (m === 'event') openEventForm();
@@ -1313,9 +1493,9 @@ function openReceiptPreview(r, qr) {
         const store = fv(f, 'store').trim();
         const amount = U.parseAmount(fv(f, 'total')) || itemsSum;
         if (match && fc(f, 'attach')) {
-          Object.assign(match, { items, receiptLink: qr || match.receiptLink, categoryId: mainCat, note: match.note || store });
+          Object.assign(match, { items, receiptStore: store || F.storeName(match), receiptLink: qr || match.receiptLink, categoryId: mainCat, note: match.note || store });
         } else {
-          S.transactions.push({ id: U.uid(), type: 'expense', amount, categoryId: mainCat, accountId: fv(f, 'acc') || accountId, date: fv(f, 'date') || date, note: store, merchant: store, items, receiptLink: qr, time: r.time || null, source: 'receipt', created: Date.now() });
+          S.transactions.push({ id: U.uid(), type: 'expense', amount, categoryId: mainCat, accountId: fv(f, 'acc') || accountId, date: fv(f, 'date') || date, note: store, merchant: store, receiptStore: store, items, receiptLink: qr, time: r.time || null, source: 'receipt', created: Date.now() });
         }
         close(); commit('Чек сохранён');
       };
@@ -1497,12 +1677,16 @@ const A = {
     a.undone = true; commit('Отменено');
   },
   'chat-clear': async () => { if (await ask('Очистить чат?', 'История переписки удалится. Добавленные ИИ платежи останутся.', 'Очистить', true)) { S.chat = []; commit(); } },
-  'price-open': el => {
-    const x = F.priceIndex(S).find(p => p.name.toLowerCase() === el.dataset.k);
-    if (!x) return;
-    sheet(`<div class="trio"><div><span class="muted small">Последняя</span><b>${money(x.last.price)}</b></div><div><span class="muted small">Мин</span><b class="pos">${money(x.min)}</b></div><div><span class="muted small">Макс</span><b>${money(x.max)}</b></div></div>
-      ${[...x.entries].reverse().map(e => `<div class="row li small"><span>${U.fmtDate(e.date)} · ${esc(e.store)}</span><b>${money(e.price)}</b></div>`).join('')}`, { title: x.name });
-  },
+  'price-open': el => openProduct(el.dataset.k),
+  'price-tab': el => { ui.priceTab = el.dataset.k; ui.priceQ = ''; refresh(); },
+  'receipt-edit': el => { closeAllSheets(); openReceiptEditor(el.dataset.id); },
+  'receipt-new': () => openReceiptEditor(null),
+  'receipt-qr': () => startQrScan(),
+  'receipt-menu': () => sheet(`<div class="menu"><button data-m="qr"><i>🔳</i>Сканировать QR-код чека</button><button data-m="photo"><i>📷</i>Сфотографировать чек</button><button data-m="manual"><i>✍️</i>Ввести вручную</button></div>`, {
+    title: 'Добавить чек', onMount(r, close) {
+      $$('[data-m]', r).forEach(b => b.onclick = () => { close(); setTimeout(() => ({ qr: startQrScan, photo: () => A.receipt(), manual: () => openReceiptEditor(null) })[b.dataset.m](), 60); });
+    },
+  }),
   'pin-set': () => openPinSet(),
   'pin-remove': async () => { if (await ask('Убрать PIN?', 'Приложение будет открываться без кода.', 'Убрать')) { S.settings.pinHash = null; commit('PIN отключён'); } },
   theme: el => { S.settings.theme = el.dataset.v; applyTheme(); commit(); },
@@ -1591,6 +1775,52 @@ async function handleShared() {
     }
     if (t) { const text = await t.text(); await c.delete('./shared-text'); if (!f) openPasteSheet(text); }
   } catch (e) { console.warn(e); }
+}
+
+// ============ Чек по QR-коду ============
+let pageResolve = null;
+function startQrScan() {
+  if (!N.isNative) { toast('Сканер QR-кодов работает в Android-версии. Здесь можно сфотографировать чек.'); return; }
+  if (!N.scanQr()) toast('Обнови приложение: в этой версии нет сканера QR-кодов');
+}
+function parseFiscalQr(url) {
+  const out = {};
+  try {
+    const p = new URL(url).searchParams;
+    const sm = p.get('s') || p.get('sum');
+    if (sm) out.total = U.parseAmount(sm);
+    const t = p.get('t') || p.get('date') || '';
+    const m = t.match(/^(\d{4})(\d{2})(\d{2})/);
+    if (m) out.date = `${m[1]}-${m[2]}-${m[3]}`;
+  } catch { /* не URL */ }
+  return out;
+}
+async function onQrScanned(raw, err) {
+  if (err) { if (err !== 'cancel') toast('Сканер не запустился: ' + err); return; }
+  const url = String(raw || '').trim();
+  if (!/^https?:\/\//i.test(url)) { toast('Это не QR-код фискального чека. Попробуй сфотографировать чек.'); return; }
+  const meta = parseFiscalQr(url);
+  const l = loading('Открываю чек на сайте ОФД…');
+  const text = await new Promise(res => {
+    pageResolve = res;
+    if (!N.loadPageText(url.replace(/^http:\/\//i, 'https://'))) res('');
+    setTimeout(() => { if (pageResolve === res) { pageResolve = null; res(''); } }, 26000);
+  });
+  if (text && text.length > 80 && AI.hasKey(S)) {
+    l.set('ИИ разбирает товары…');
+    try {
+      const r = await AI.readReceiptText(S, text);
+      l.close();
+      if (r.items?.length) {
+        if (!(r.total > 0) && meta.total) r.total = meta.total;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date || '') && meta.date) r.date = meta.date;
+        openReceiptPreview(r, url);
+        return;
+      }
+    } catch (e) { l.close(); toast(e.message); }
+  } else l.close();
+  toast('Не удалось получить товары со страницы чека — заполни позиции вручную или сфотографируй чек.');
+  openReceiptEditor(null, { total: meta.total, date: meta.date, link: url });
 }
 
 // ============ Android: автоматика ============
@@ -1789,6 +2019,8 @@ function autoSetupSheet() {
 }
 
 window.__karmanNative = {
+  onQr: (value, err) => { if (S) onQrScanned(value, err); },
+  onPageText: text => { const r = pageResolve; pageResolve = null; r?.(text || ''); },
   onPush: () => processPushQueue(),
   onVoice: text => { if (S) onVoiceText(text); },
   onShared: () => { if (S) handleNativeShared(); },

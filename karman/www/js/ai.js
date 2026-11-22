@@ -169,17 +169,16 @@ export async function resizeImage(file, max = 1600) {
   return { data: c.toDataURL('image/jpeg', 0.85).split(',')[1], media_type: 'image/jpeg' };
 }
 
-export async function readReceipt(S, file) {
-  const img = await resizeImage(file);
+function receiptTool(S) {
   const names = S.categories.filter(c => c.type === 'expense' && !c.hidden).map(c => c.name);
-  const tool = {
+  return {
     name: 'save_receipt',
     description: 'Сохранить распознанный кассовый чек',
     input_schema: {
       type: 'object',
       properties: {
-        readable: { type: 'boolean', description: 'false, если на фото не чек или он нечитаем' },
-        store: { type: 'string', description: 'Название магазина' },
+        readable: { type: 'boolean', description: 'false, если это не чек или он нечитаем' },
+        store: { type: 'string', description: 'Название магазина / торговой точки (коротко, без ТОО/ИП)' },
         date: { type: 'string', description: 'Дата покупки YYYY-MM-DD' },
         time: { type: 'string', description: 'Время HH:MM' },
         total: { type: 'number', description: 'Итог к оплате, тенге' },
@@ -202,11 +201,24 @@ export async function readReceipt(S, file) {
       required: ['readable', 'total', 'items'],
     },
   };
-  const res = await structured(S, tool, [
+}
+
+export async function readReceipt(S, file) {
+  const img = await resizeImage(file);
+  const res = await structured(S, receiptTool(S), [
     { image: { mime: img.media_type, data: img.data } },
     { text: `Это фото кассового чека (Казахстан, тенге). Сегодня ${U.today()}. Распознай магазин, дату, итог, способ оплаты и все позиции. Если год написан двумя цифрами — это 20XX. Скидки вычти из суммы позиции. Сокращённые названия расшифруй, если уверен. Каждой позиции подбери категорию из списка.` },
   ], 8192);
   if (res.readable === false) throw new Error('Не получилось прочитать чек. Сфотографируй ровнее и при хорошем свете.');
+  return res;
+}
+
+// Текст страницы чека с сайта оператора фискальных данных (по QR-коду)
+export async function readReceiptText(S, text) {
+  const res = await structured(S, receiptTool(S), [
+    { text: `Ниже текст страницы фискального чека с сайта оператора фискальных данных (Казахстан, тенге). Сегодня ${U.today()}. Извлеки магазин (название торговой точки или организации, коротко), дату и время покупки, итог, способ оплаты (наличные/карта) и ВСЕ позиции с количеством, ценой и суммой. Скидки вычти из суммы позиции. Каждой позиции подбери категорию из списка. Если это не чек — readable=false.\n\n---\n${String(text).slice(0, 30000)}` },
+  ], 8192);
+  if (res.readable === false) throw new Error('На странице по QR-коду нет чека.');
   return res;
 }
 
