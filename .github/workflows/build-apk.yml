@@ -79,6 +79,11 @@ jobs:
           APK="karman-$VERSION-build$BUILD_NUMBER.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$APK"
           node -e "global.self={};require(process.cwd()+'/www/js/version.js');console.log(self.APP_NOTES.map(n=>'- '+n).join('\n'))" > notes.md
-          gh release create "build-$BUILD_NUMBER" "$APK" \
-            --title "Карман $VERSION (сборка $BUILD_NUMBER)" \
-            --notes-file notes.md
+          if gh release view "build-$BUILD_NUMBER" >/dev/null 2>&1; then
+            # повторный запуск той же сборки (Re-run) — просто заменяем файл в релизе
+            gh release upload "build-$BUILD_NUMBER" "$APK" --clobber
+          else
+            gh release create "build-$BUILD_NUMBER" "$APK" \
+              --title "Карман $VERSION (сборка $BUILD_NUMBER)" \
+              --notes-file notes.md
+          fi
