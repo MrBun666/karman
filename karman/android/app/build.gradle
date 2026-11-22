@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Номер версии берётся из www/js/version.js, номер сборки — из GitHub Actions
+def versionFile = file('../../www/js/version.js')
+def appVersion = (versionFile.text =~ /APP_VERSION\s*=\s*'([^']+)'/)[0][1]
+def keystorePath = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'kz.karman.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'kz.karman.app'
+        minSdk 26
+        targetSdk 34
+        versionCode((System.getenv('BUILD_NUMBER') ?: '1').toInteger())
+        versionName appVersion
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias 'karman'
+                keyPassword System.getenv('KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystorePath ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

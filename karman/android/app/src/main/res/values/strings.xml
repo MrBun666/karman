@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Карман</string>
+    <string name="listener_name">Карман: запись трат из уведомлений банков</string>
+    <string name="widget_name">Карман: можно тратить сегодня</string>
+</resources>
